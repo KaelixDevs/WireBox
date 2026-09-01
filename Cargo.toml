@@ -1,0 +1,24 @@
+[package]
+name = "WireBox"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "wirebox"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wirebox"
+path = "src/main.rs"
+
+[dependencies]
+thiserror = "2"
+dirs = "6"
+
+# Not used yet by the engine-first build - kept here for the UI/audio
+# phases that come next, so we're not re-adding them later.
+adw = { version = "0.9.2", package = "libadwaita" }
+gtk = { version = "0.11.4", package = "gtk4" }
+pipewire = "0.10.1"
+toml = "0.9"
+serde = { version = "1", features = ["derive"] }
