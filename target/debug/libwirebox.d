@@ -1,0 +1,1 @@
+/home/chris/Projects/WireBox/target/debug/libwirebox.rlib: /home/chris/Projects/WireBox/src/catalog.rs /home/chris/Projects/WireBox/src/error.rs /home/chris/Projects/WireBox/src/lib.rs /home/chris/Projects/WireBox/src/library.rs /home/chris/Projects/WireBox/src/wine.rs
