@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::{
+    bootstrap,
     catalog::Application,
     error::{Result, WireBoxError},
     wine::Wine,
@@ -89,34 +90,50 @@ impl Library {
         Ok(())
     }
 
-    /// Runs `installer` inside `application`'s dedicated prefix and blocks
-    /// until it exits, then re-checks disk for the result. Installers are
-    /// interactive, so call this from a background thread in any UI
-    /// context - it will not return until the user finishes clicking
-    /// through the installer's own window.
-    pub fn install(&self, application: Application, installer: &Path) -> Result<AppState> {
-        if !installer.is_file() {
-            return Err(WireBoxError::NotFound(installer.to_path_buf()));
-        }
-
+    /// Makes sure IK Product Manager is installed inside `application`'s
+    /// dedicated prefix, then opens it. No installer file needed from the
+    /// user - WireBox downloads Product Manager itself (the one piece of
+    /// IK Multimedia software available without an account) and runs it.
+    ///
+    /// This does **not** install the target application by itself: the
+    /// user still has to log into their own IK Multimedia account and
+    /// click install inside Product Manager's window, which WireBox can't
+    /// (and shouldn't) automate. Poll `state()` afterward - e.g. on a
+    /// timer - to notice once that finishes.
+    ///
+    /// Blocks while Product Manager's own setup wizard runs (the first
+    /// time only), so call this from a background thread in any UI
+    /// context.
+    pub fn install(&self, application: Application) -> Result<()> {
         let path = self.prefix_path(application);
 
-        fs::create_dir_all(&path).map_err(|source| WireBoxError::CreateDir { path, source })?;
+        fs::create_dir_all(&path).map_err(|source| WireBoxError::CreateDir {
+            path: path.clone(),
+            source,
+        })?;
 
         let wine = Wine::detect()?;
-        let prefix = wine.prefix(self.prefix_path(application));
+        let prefix = wine.prefix(path);
 
-        prefix.run_to_completion(installer)?;
+        prefix.ensure_initialized()?;
 
-        let state = self.state(application);
-
-        if state.executable.is_none() {
-            return Err(WireBoxError::InstallVerificationFailed {
-                application: application.name(),
-            });
+        // Already installed in this prefix from a previous attempt - just
+        // reopen it instead of downloading/running the setup again.
+        if let Some(product_manager) = find_by_substring(prefix.path(), "product manager") {
+            prefix.spawn_app(&product_manager)?;
+            return Ok(());
         }
 
-        Ok(state)
+        let setup = bootstrap::cached_installer()?;
+
+        prefix.run_to_completion(&setup)?;
+
+        let product_manager = find_by_substring(prefix.path(), "product manager")
+            .ok_or(WireBoxError::ProductManagerMissing)?;
+
+        prefix.spawn_app(&product_manager)?;
+
+        Ok(())
     }
 }
 
@@ -142,10 +159,27 @@ fn find_executable(prefix: &Path, candidates: &[&str]) -> Option<PathBuf> {
         return None;
     }
 
-    search(&drive_c, candidates, 0)
+    search(&drive_c, 0, &|name| {
+        candidates.iter().any(|candidate| name.eq_ignore_ascii_case(candidate))
+    })
 }
 
-fn search(directory: &Path, candidates: &[&str], depth: usize) -> Option<PathBuf> {
+fn find_by_substring(prefix: &Path, needle: &str) -> Option<PathBuf> {
+    let drive_c = prefix.join("drive_c");
+
+    if !drive_c.is_dir() {
+        return None;
+    }
+
+    let needle = needle.to_ascii_lowercase();
+
+    search(&drive_c, 0, &|name| {
+        let name = name.to_ascii_lowercase();
+        name.ends_with(".exe") && name.contains(&needle)
+    })
+}
+
+fn search(directory: &Path, depth: usize, matches: &dyn Fn(&str) -> bool) -> Option<PathBuf> {
     if depth > 8 {
         return None;
     }
@@ -156,12 +190,10 @@ fn search(directory: &Path, candidates: &[&str], depth: usize) -> Option<PathBuf
         let path = entry.path();
 
         if path.is_file() {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-
-            if candidates.iter().any(|candidate| name.eq_ignore_ascii_case(candidate)) {
-                return Some(path);
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                if matches(name) {
+                    return Some(path);
+                }
             }
         } else if path.is_dir() {
             let Some(dir_name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -169,13 +201,13 @@ fn search(directory: &Path, candidates: &[&str], depth: usize) -> Option<PathBuf
             };
 
             // Wine's internal Windows system directory holds tens of
-            // thousands of files and never contains TONEX/AmpliTube -
-            // skip it so installs are found quickly.
+            // thousands of files and never contains what we're looking
+            // for - skip it so searches stay fast.
             if dir_name.eq_ignore_ascii_case("windows") {
                 continue;
             }
 
-            if let Some(found) = search(&path, candidates, depth + 1) {
+            if let Some(found) = search(&path, depth + 1, matches) {
                 return Some(found);
             }
         }

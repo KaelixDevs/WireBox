@@ -3,6 +3,7 @@
 //! `main.rs` exposes it as a CLI for now, and the eventual GTK front end
 //! will depend on this crate the same way.
 
+pub mod bootstrap;
 pub mod catalog;
 pub mod error;
 pub mod library;

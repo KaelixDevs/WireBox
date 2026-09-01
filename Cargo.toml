@@ -11,13 +11,18 @@ path = "src/lib.rs"
 name = "wirebox"
 path = "src/main.rs"
 
+[[bin]]
+name = "wirebox-cli"
+path = "src/bin/cli.rs"
+
 [dependencies]
 thiserror = "2"
 dirs = "6"
 
-# Not used yet by the engine-first build - kept here for the UI/audio
-# phases that come next, so we're not re-adding them later.
-adw = { version = "0.9.2", package = "libadwaita" }
+# GUI (the `wirebox` binary). `pipewire`/`toml`/`serde` are still unused -
+# kept here for the audio-integration and config-file phases that come
+# after this one, so we're not re-adding them later.
+adw = { version = "0.9.2", package = "libadwaita", features = ["v1_1", "v1_2", "v1_3", "v1_4", "v1_5"] }
 gtk = { version = "0.11.4", package = "gtk4" }
 pipewire = "0.10.1"
 toml = "0.9"

@@ -33,6 +33,12 @@ pub enum WireBoxError {
 
     #[error("{application} installer finished, but WireBox couldn't find it afterward")]
     InstallVerificationFailed { application: &'static str },
+
+    #[error("IK Product Manager finished installing, but WireBox couldn't find it inside the prefix afterward")]
+    ProductManagerMissing,
+
+    #[error("no .exe found after extracting {0}")]
+    NoExecutableFound(PathBuf),
 }
 
 pub type Result<T> = std::result::Result<T, WireBoxError>;
