@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use pipewire::{context::Context, main_loop::MainLoop, types::ObjectType};
+use pipewire::{context::ContextRc, main_loop::MainLoopRc, types::ObjectType};
 
 use crate::error::{Result, WireBoxError};
 
@@ -57,10 +57,10 @@ pub struct AudioDevice {
 ///
 /// Blocking - call this from a background thread in any UI context.
 pub fn list_audio_devices() -> Result<Vec<AudioDevice>> {
-    let mainloop = MainLoop::new(None).map_err(pipewire_error)?;
-    let context = Context::new(&mainloop).map_err(pipewire_error)?;
-    let core = context.connect(None).map_err(pipewire_error)?;
-    let registry = core.get_registry().map_err(pipewire_error)?;
+    let mainloop = MainLoopRc::new(None).map_err(pipewire_error)?;
+    let context = ContextRc::new(&mainloop, None).map_err(pipewire_error)?;
+    let core = context.connect_rc(None).map_err(pipewire_error)?;
+    let registry = core.get_registry_rc().map_err(pipewire_error)?;
 
     let devices: Rc<RefCell<Vec<AudioDevice>>> = Rc::new(RefCell::new(Vec::new()));
     let devices_for_listener = Rc::clone(&devices);
