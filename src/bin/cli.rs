@@ -12,6 +12,8 @@ fn main() {
         Some("status") => status(),
         Some("install") => install(args.get(2)),
         Some("launch") => launch(args.get(2)),
+        Some("audio") => audio(args.get(2)),
+        Some("reset") => reset(args.get(2)),
         _ => print_usage(),
     }
 }
@@ -23,6 +25,8 @@ fn print_usage() {
     println!("    wirebox status");
     println!("    wirebox install <tonex|amplitube5>");
     println!("    wirebox launch  <tonex|amplitube5>");
+    println!("    wirebox audio   <tonex|amplitube5>   (registers WineASIO for low-latency audio)");
+    println!("    wirebox reset   <tonex|amplitube5>   (wipes and recreates the prefix)");
 }
 
 fn parse_application(arg: Option<&String>) -> Option<Application> {
@@ -38,6 +42,10 @@ fn status() {
     }
 
     println!("Library root: {}", library.root().display());
+    println!(
+        "PipeWire:     {}",
+        if wirebox::audio::is_pipewire_active() { "active" } else { "not detected" }
+    );
     println!();
 
     for state in library.all_states() {
@@ -97,5 +105,41 @@ fn launch(app: Option<&String>) {
     match library.launch(application) {
         Ok(()) => println!("{} launched.", application.name()),
         Err(error) => eprintln!("Launch failed: {error}"),
+    }
+}
+
+fn audio(app: Option<&String>) {
+    let Some(application) = parse_application(app) else {
+        eprintln!("Usage: wirebox audio <tonex|amplitube5>");
+        return;
+    };
+
+    let library = Library::new();
+
+    println!(
+        "Registering WineASIO for {} - this needs winetricks installed and can take a moment...",
+        application.name()
+    );
+
+    match library.set_up_audio(application) {
+        Ok(()) => println!("Done. {} should now see a low-latency ASIO audio device.", application.name()),
+        Err(error) => eprintln!("Audio setup failed: {error}"),
+    }
+}
+
+fn reset(app: Option<&String>) {
+    let Some(application) = parse_application(app) else {
+        eprintln!("Usage: wirebox reset <tonex|amplitube5>");
+        return;
+    };
+
+    let library = Library::new();
+
+    match library.reset(application) {
+        Ok(()) => println!(
+            "{}'s prefix has been wiped and recreated. You'll need to reinstall it.",
+            application.name()
+        ),
+        Err(error) => eprintln!("Reset failed: {error}"),
     }
 }

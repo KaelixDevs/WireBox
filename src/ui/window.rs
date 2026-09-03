@@ -109,6 +109,15 @@ pub fn build_window(app: &Application) {
 
     runtime.add(&wine_row);
 
+    let pipewire_row = ActionRow::builder().title("PipeWire").build();
+    pipewire_row.add_prefix(&Image::from_icon_name("audio-volume-high-symbolic"));
+    pipewire_row.set_subtitle(if wirebox::audio::is_pipewire_active() {
+        "Active — WineASIO audio setup is available"
+    } else {
+        "Not detected — WineASIO audio setup will likely fail"
+    });
+    runtime.add(&pipewire_row);
+
     let library_row = ActionRow::builder().title("Library Location").build();
     library_row.add_prefix(&Image::from_icon_name("folder-symbolic"));
     library_row.set_subtitle(&library.root().display().to_string());
@@ -170,7 +179,13 @@ fn build_app_row(
     button.set_valign(Align::Center);
     row.add_suffix(&button);
 
-    refresh_row(&library, application, &row, &button);
+    let audio_button = Button::from_icon_name("audio-volume-high-symbolic");
+    audio_button.set_valign(Align::Center);
+    audio_button.set_tooltip_text(Some("Set up low-latency audio (WineASIO)"));
+    audio_button.set_visible(false);
+    row.add_suffix(&audio_button);
+
+    refresh_row(&library, application, &row, &button, &audio_button);
 
     let window = window.clone();
     let toast_overlay = toast_overlay.clone();
@@ -178,6 +193,21 @@ fn build_app_row(
     let row_for_click = row.clone();
     let button_for_click = button.clone();
     let spinner_for_click = spinner.clone();
+    let audio_button_for_install = audio_button.clone();
+
+    let audio_library = Arc::clone(&library);
+    let audio_toast_overlay = toast_overlay.clone();
+    let audio_row = row.clone();
+
+    audio_button.connect_clicked(move |button| {
+        start_audio_setup(
+            Arc::clone(&audio_library),
+            &audio_toast_overlay,
+            application,
+            audio_row.clone(),
+            button.clone(),
+        );
+    });
 
     button.connect_clicked(move |_| {
         let state = library.state(application);
@@ -204,6 +234,7 @@ fn build_app_row(
             row_for_click.clone(),
             button_for_click.clone(),
             spinner_for_click.clone(),
+            audio_button_for_install.clone(),
         );
     });
 
@@ -221,6 +252,7 @@ fn start_setup(
     row: ActionRow,
     button: Button,
     spinner: Spinner,
+    audio_button: Button,
 ) {
     button.set_sensitive(false);
     button.set_label("Setting up…");
@@ -255,6 +287,7 @@ fn start_setup(
                     row.clone(),
                     button.clone(),
                     spinner.clone(),
+                    audio_button.clone(),
                 );
 
                 glib::ControlFlow::Break
@@ -296,6 +329,7 @@ fn poll_for_completion(
     row: ActionRow,
     button: Button,
     spinner: Spinner,
+    audio_button: Button,
 ) {
     glib::timeout_add_local(Duration::from_secs(2), move || {
         let state = library.state(application);
@@ -306,6 +340,7 @@ fn poll_for_completion(
             button.set_sensitive(true);
             button.set_label(&format!("Launch {}", application.name()));
             row.set_subtitle(&format!("Installed — {}", executable.display()));
+            audio_button.set_visible(true);
             show_toast(&toast_overlay, &format!("{} is ready", application.name()));
 
             glib::ControlFlow::Break
@@ -315,17 +350,25 @@ fn poll_for_completion(
     });
 }
 
-fn refresh_row(library: &Library, application: WireApp, row: &ActionRow, button: &Button) {
+fn refresh_row(
+    library: &Library,
+    application: WireApp,
+    row: &ActionRow,
+    button: &Button,
+    audio_button: &Button,
+) {
     let state = library.state(application);
 
     match state.executable {
         Some(executable) => {
             button.set_label(&format!("Launch {}", application.name()));
             row.set_subtitle(&format!("Installed — {}", executable.display()));
+            audio_button.set_visible(true);
         }
         None => {
             button.set_label(&format!("Install {}", application.name()));
             row.set_subtitle("Not installed");
+            audio_button.set_visible(false);
         }
     }
 }
@@ -333,5 +376,71 @@ fn refresh_row(library: &Library, application: WireApp, row: &ActionRow, button:
 fn show_toast(overlay: &ToastOverlay, message: &str) {
     let toast = adw::Toast::builder().title(message).timeout(4).build();
     overlay.add_toast(toast);
+}
+
+/// Registers WineASIO inside `application`'s prefix via `winetricks`, on
+/// a background thread so the UI stays responsive while it downloads and
+/// builds the driver (can take a while the first time).
+fn start_audio_setup(
+    library: Arc<Library>,
+    toast_overlay: &ToastOverlay,
+    application: WireApp,
+    row: ActionRow,
+    audio_button: Button,
+) {
+    audio_button.set_sensitive(false);
+
+    // Rebuild the "installed" subtitle ourselves rather than reading it
+    // back off the widget - GTK's string-property getters vary between
+    // returning `GString` and `Option<GString>` across binding versions,
+    // and we already know the state that produced it (this button is
+    // only visible once `state.executable` is `Some`).
+    let installed_subtitle = library
+        .state(application)
+        .executable
+        .map(|executable| format!("Installed — {}", executable.display()))
+        .unwrap_or_else(|| "Installed".to_string());
+
+    row.set_subtitle("Setting up low-latency audio (WineASIO via winetricks)…");
+
+    let (sender, receiver) = mpsc::channel::<wirebox::Result<()>>();
+
+    let audio_library = Arc::clone(&library);
+
+    std::thread::spawn(move || {
+        let result = audio_library.set_up_audio(application);
+        let _ = sender.send(result);
+    });
+
+    let toast_overlay = toast_overlay.clone();
+
+    glib::timeout_add_local(Duration::from_millis(150), move || {
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                audio_button.set_sensitive(true);
+                row.set_subtitle(&format!("{installed_subtitle} — WineASIO is registered"));
+                show_toast(&toast_overlay, &format!("Audio set up for {}", application.name()));
+
+                glib::ControlFlow::Break
+            }
+
+            Ok(Err(error)) => {
+                audio_button.set_sensitive(true);
+                row.set_subtitle(&installed_subtitle);
+                show_toast(&toast_overlay, &format!("Audio setup failed: {error}"));
+
+                glib::ControlFlow::Break
+            }
+
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+
+            Err(mpsc::TryRecvError::Disconnected) => {
+                audio_button.set_sensitive(true);
+                show_toast(&toast_overlay, "Audio setup thread ended unexpectedly.");
+
+                glib::ControlFlow::Break
+            }
+        }
+    });
 }
 

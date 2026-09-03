@@ -39,6 +39,43 @@ pub enum WireBoxError {
 
     #[error("no .exe found after extracting {0}")]
     NoExecutableFound(PathBuf),
+
+    #[error("failed to remove `{path}`: {source}")]
+    RemoveDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("winetricks was not found on this system (needed to set up audio/runtime components)")]
+    WinetricksNotInstalled,
+
+    #[error("failed to read config at `{path}`: {source}")]
+    ConfigRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse config at `{path}`: {source}")]
+    ConfigParse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("failed to serialize config: {source}")]
+    ConfigSerialize {
+        #[source]
+        source: toml::ser::Error,
+    },
+
+    #[error("failed to write config at `{path}`: {source}")]
+    ConfigWrite {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, WireBoxError>;

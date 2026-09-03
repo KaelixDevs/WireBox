@@ -6,6 +6,7 @@ use std::{
 use crate::{
     bootstrap,
     catalog::Application,
+    dependencies,
     error::{Result, WireBoxError},
     wine::Wine,
 };
@@ -117,6 +118,18 @@ impl Library {
 
         prefix.ensure_initialized()?;
 
+        // Best-effort: a lot of IK Multimedia's installers quietly expect
+        // these to already be present. If winetricks isn't installed, or
+        // this step fails for some other reason, don't abort the whole
+        // install over it - the target app may still work fine without
+        // it, and the alternative (hard-failing here) would block every
+        // install on a component that's genuinely optional in many cases.
+        if let Err(error) = dependencies::ensure_base_dependencies(prefix.path()) {
+            eprintln!(
+                "Warning: couldn't install base Windows runtime components ({error}). Continuing anyway - some installers may fail or behave oddly without them."
+            );
+        }
+
         // Already installed in this prefix from a previous attempt - just
         // reopen it instead of downloading/running the setup again.
         if let Some(product_manager) = find_by_substring(prefix.path(), "product manager") {
@@ -132,6 +145,41 @@ impl Library {
             .ok_or(WireBoxError::ProductManagerMissing)?;
 
         prefix.spawn_app(&product_manager)?;
+
+        Ok(())
+    }
+
+    /// Registers WineASIO inside `application`'s prefix so it can see a
+    /// real, low-latency audio device. Meant to be triggered explicitly
+    /// once the application is actually installed - not part of
+    /// `install()` itself, since it's specifically about audio quality
+    /// rather than getting the app to run at all. Blocks on winetricks,
+    /// so call this from a background thread in any UI context.
+    pub fn set_up_audio(&self, application: Application) -> Result<()> {
+        let wine = Wine::detect()?;
+        let prefix = wine.prefix(self.prefix_path(application));
+
+        prefix.ensure_initialized()?;
+
+        dependencies::ensure_asio_bridge(prefix.path())
+    }
+
+    /// Deletes and recreates `application`'s prefix from scratch. This is
+    /// the blunt-instrument fix for a prefix that's gotten into a bad
+    /// state (corrupted registry, half-finished install, etc.) - it wipes
+    /// everything installed for that application, including TONEX or
+    /// AmpliTube itself, which will need reinstalling afterward.
+    pub fn reset(&self, application: Application) -> Result<()> {
+        let path = self.prefix_path(application);
+
+        if path.is_dir() {
+            fs::remove_dir_all(&path).map_err(|source| WireBoxError::RemoveDir {
+                path: path.clone(),
+                source,
+            })?;
+        }
+
+        fs::create_dir_all(&path).map_err(|source| WireBoxError::CreateDir { path, source })?;
 
         Ok(())
     }
