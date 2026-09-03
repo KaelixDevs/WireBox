@@ -13,6 +13,11 @@ pub struct Config {
     /// audio dropouts on marginal hardware.
     pub buffer_size: u32,
     pub sample_rate: u32,
+    /// PipeWire node name (see `audio::AudioDevice::name`) of the user's
+    /// chosen output device, if they've picked one.
+    pub preferred_output_device: Option<String>,
+    /// PipeWire node name of the user's chosen input device, if any.
+    pub preferred_input_device: Option<String>,
 }
 
 impl Default for Config {
@@ -20,6 +25,8 @@ impl Default for Config {
         Self {
             buffer_size: 128,
             sample_rate: 48_000,
+            preferred_output_device: None,
+            preferred_input_device: None,
         }
     }
 }

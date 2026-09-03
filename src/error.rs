@@ -50,6 +50,9 @@ pub enum WireBoxError {
     #[error("winetricks was not found on this system (needed to set up audio/runtime components)")]
     WinetricksNotInstalled,
 
+    #[error("PipeWire error: {0}")]
+    PipeWire(String),
+
     #[error("failed to read config at `{path}`: {source}")]
     ConfigRead {
         path: PathBuf,

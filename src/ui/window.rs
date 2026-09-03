@@ -125,6 +125,17 @@ pub fn build_window(app: &Application) {
 
     content.append(&runtime);
 
+    let audio_devices = PreferencesGroup::builder()
+        .title("Audio Devices")
+        .description("What PipeWire currently sees on this system")
+        .build();
+
+    let audio_placeholder = ActionRow::builder().title("Scanning for devices…").build();
+    audio_devices.add(&audio_placeholder);
+    content.append(&audio_devices);
+
+    load_audio_devices(&audio_devices, audio_placeholder);
+
     // ---------------------------------------------------------
     // Assemble
     // ---------------------------------------------------------
@@ -376,6 +387,112 @@ fn refresh_row(
 fn show_toast(overlay: &ToastOverlay, message: &str) {
     let toast = adw::Toast::builder().title(message).timeout(4).build();
     overlay.add_toast(toast);
+}
+
+/// Scans for PipeWire audio devices on a background thread and replaces
+/// `placeholder` with one row per device once done. Each row lets the
+/// user mark it as their preferred input/output in `Config` - this is a
+/// saved *preference* for WireBox to remember, not live PipeWire routing;
+/// actually moving audio between devices is still qpwgraph/helvum/your
+/// system's sound settings, same as for any other app.
+fn load_audio_devices(group: &PreferencesGroup, placeholder: ActionRow) {
+    let (sender, receiver) = mpsc::channel::<wirebox::Result<Vec<wirebox::audio::AudioDevice>>>();
+
+    std::thread::spawn(move || {
+        let result = wirebox::audio::list_audio_devices();
+        let _ = sender.send(result);
+    });
+
+    let group = group.clone();
+
+    glib::timeout_add_local(Duration::from_millis(150), move || {
+        match receiver.try_recv() {
+            Ok(Ok(devices)) => {
+                group.remove(&placeholder);
+
+                if devices.is_empty() {
+                    let row = ActionRow::builder()
+                        .title("No devices found")
+                        .subtitle("PipeWire returned an empty list")
+                        .build();
+                    group.add(&row);
+                } else {
+                    let config = wirebox::Config::load().unwrap_or_default();
+
+                    for device in devices {
+                        add_device_row(&group, device, &config);
+                    }
+                }
+
+                glib::ControlFlow::Break
+            }
+
+            Ok(Err(error)) => {
+                placeholder.set_title("Couldn't scan for audio devices");
+                placeholder.set_subtitle(&error.to_string());
+
+                glib::ControlFlow::Break
+            }
+
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+
+            Err(mpsc::TryRecvError::Disconnected) => {
+                placeholder.set_title("Audio scan thread ended unexpectedly");
+
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+fn add_device_row(group: &PreferencesGroup, device: wirebox::audio::AudioDevice, config: &wirebox::Config) {
+    use wirebox::audio::AudioDirection;
+
+    let (icon_name, kind_label, is_preferred) = match device.direction {
+        AudioDirection::Output => (
+            "audio-speakers-symbolic",
+            "Output",
+            config.preferred_output_device.as_deref() == Some(device.name.as_str()),
+        ),
+        AudioDirection::Input => (
+            "audio-input-microphone-symbolic",
+            "Input",
+            config.preferred_input_device.as_deref() == Some(device.name.as_str()),
+        ),
+    };
+
+    let row = ActionRow::builder()
+        .title(device.description.clone())
+        .subtitle(format!("{kind_label} — {}", device.name))
+        .build();
+
+    row.add_prefix(&Image::from_icon_name(icon_name));
+
+    let button = Button::with_label(if is_preferred { "Preferred" } else { "Set as preferred" });
+    button.set_valign(Align::Center);
+    button.set_sensitive(!is_preferred);
+    row.add_suffix(&button);
+
+    let device_name = device.name.clone();
+    let direction = device.direction;
+
+    button.connect_clicked(move |button| {
+        let Ok(mut config) = wirebox::Config::load() else {
+            return;
+        };
+
+        match direction {
+            AudioDirection::Output => config.preferred_output_device = Some(device_name.clone()),
+            AudioDirection::Input => config.preferred_input_device = Some(device_name.clone()),
+        }
+
+        if config.save().is_ok() {
+            button.set_label("Preferred");
+            button.set_sensitive(false);
+        }
+    });
+
+    group.add(&row);
 }
 
 /// Registers WineASIO inside `application`'s prefix via `winetricks`, on

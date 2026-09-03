@@ -54,8 +54,17 @@ fn cache_directory() -> PathBuf {
 }
 
 fn download(url: &str, destination: &Path) -> Result<()> {
+    // g1.ikmultimedia.com (their download CDN) rejects requests that look
+    // like a bare script - no User-Agent/Referer - which is what curl
+    // sends by default. This isn't optional: without both of these the
+    // CDN returns a non-2xx response and `--fail` turns that into exit
+    // code 22. Confirmed the URL itself is current and correct as of
+    // this writing by checking IK Multimedia's own download page.
     let status = Command::new("curl")
-        .args(["-L", "--fail", "-o"])
+        .args(["-L", "--fail", "--silent", "--show-error"])
+        .args(["-A", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"])
+        .args(["-e", "https://www.ikmultimedia.com/products/productmanager/"])
+        .arg("-o")
         .arg(destination)
         .arg(url)
         .status()
@@ -68,8 +77,12 @@ fn download(url: &str, destination: &Path) -> Result<()> {
         let _ = fs::remove_file(destination);
 
         return Err(WireBoxError::NonZeroExit {
-            command: format!("curl -L {url}"),
+            command: format!(
+                "curl -L {url} (if this keeps failing, download it yourself in a browser and save it to {})",
+                destination.display()
+            ),
             status,
+
         });
     }
 
