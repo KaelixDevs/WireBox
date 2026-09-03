@@ -114,11 +114,15 @@ impl WinePrefix {
 
     /// Launches an executable inside this prefix and returns immediately.
     /// Use this for running the actual application once it's installed.
+    ///
+    /// Runs inside Wine's built-in "virtual desktop" mode by default -
+    /// see `VIRTUAL_DESKTOP_NAME`/`VIRTUAL_DESKTOP_SIZE` below for why.
     pub fn spawn_app(&self, executable: &Path) -> Result<Child> {
         self.require_file(executable)?;
         self.ensure_initialized()?;
 
         self.command()
+            .args(virtual_desktop_args())
             .arg(executable)
             .spawn()
             .map_err(|source| WireBoxError::Spawn {
@@ -137,6 +141,7 @@ impl WinePrefix {
 
         let status = self
             .command()
+            .args(virtual_desktop_args())
             .arg(executable)
             .status()
             .map_err(|source| WireBoxError::Spawn {
@@ -176,4 +181,29 @@ fn check_status(command: &str, status: ExitStatus) -> Result<()> {
             status,
         })
     }
+}
+
+/// The name given to Wine's virtual desktop - also what shows up as the
+/// window title, so window-manager rules can target it directly (see
+/// README's window manager section).
+const VIRTUAL_DESKTOP_NAME: &str = "wirebox";
+const VIRTUAL_DESKTOP_SIZE: &str = "1600x900";
+
+/// Wine normally gives each top-level window in an app its own loose X11
+/// window with no reliable hints for a tiling compositor to work with -
+/// which is exactly what produces the classic "stray undecorated window
+/// stuck at 0,0, can't be moved or closed" bug on Hyprland, MangoWM,
+/// Sway, and other tiling Wayland compositors.
+///
+/// Wine's built-in virtual desktop mode (`explorer /desktop=NAME,WxH`)
+/// fixes this at the source: it runs the entire app inside one single,
+/// normal, resizable top-level window that Wine manages internally, so
+/// the host compositor only ever sees one predictable window instead of
+/// an unbounded number of stray ones. This is standard, long-standing
+/// Wine functionality - not a WireBox-specific workaround.
+fn virtual_desktop_args() -> [String; 2] {
+    [
+        "explorer".to_string(),
+        format!("/desktop={VIRTUAL_DESKTOP_NAME},{VIRTUAL_DESKTOP_SIZE}"),
+    ]
 }

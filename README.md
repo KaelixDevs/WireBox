@@ -174,6 +174,46 @@ WireBox sits around the application and compatibility environment rather than ac
 
 Audio performance will depend on the user's hardware, Linux audio configuration, application version, and system configuration.
 
+## Window Managers (Hyprland, MangoWM, Sway, and other tiling compositors)
+
+Wine apps are notorious on tiling Wayland compositors: without proper
+hints, individual sub-windows can show up as undecorated, immovable,
+mispositioned windows - most visibly as a stray black box stuck at the
+top-left of the screen. WireBox works around this at the source by
+running every application inside Wine's built-in **virtual desktop**
+mode, which contains the whole app in one single, normal, resizable
+top-level window instead of an unbounded number of loose ones. This is
+on by default - no configuration needed for it to at least be *one*
+predictable window instead of several broken ones.
+
+Getting that one window to open **floating instead of tiled** is still
+up to your compositor's own config, though - that's a policy decision
+only it can make. The window's title is always `wirebox`, so you can
+target it directly:
+
+**Hyprland** (`~/.config/hypr/hyprland.conf`):
+
+```
+windowrulev2 = float, title:^(wirebox)$
+windowrulev2 = size 1600 900, title:^(wirebox)$
+```
+
+**Sway** (`~/.config/sway/config`):
+
+```
+for_window [title="wirebox"] floating enable
+```
+
+**MangoWM** (`~/.config/mango/config.conf`): MangoWM supports per-tag
+window rules, but as a newer project its exact rule syntax may have
+moved since this was written - match on the window title `wirebox` and
+check `man mango` or the [MangoWM docs](https://mangowm.github.io/docs/)
+for the current rule format rather than trusting this file blindly.
+
+If you're on a different tiling compositor entirely, the same idea
+applies: look for however it lets you float or rule a window by title,
+and use `wirebox` as the match.
+
 ## Linux Support
 
 WireBox is built specifically for Linux, with broad distribution support as a core goal of the project.
