@@ -25,7 +25,7 @@ pub fn build_window(app: &Application) {
         .application(app)
         .title("WireBox")
         .default_width(760)
-        .default_height(640)
+        .default_height(680)
         .build();
 
     let toast_overlay = ToastOverlay::new();
@@ -66,31 +66,47 @@ pub fn build_window(app: &Application) {
 
     content.append(&intro);
 
-    let applications = PreferencesGroup::builder()
-        .title("Applications")
-        .description("Each app runs in its own isolated Wine environment")
+    // ---------------------------------------------------------
+    // IK Product Manager - the one shared gateway to installing
+    // either (or both) application.
+    // ---------------------------------------------------------
+
+    let product_manager_group = PreferencesGroup::builder()
+        .title("IK Product Manager")
+        .description("Your IK Multimedia account, shared by both applications below")
         .build();
 
-    let tonex_row = build_app_row(
-        &window,
-        Arc::clone(&library),
-        &toast_overlay,
-        WireApp::Tonex,
-        "audio-input-microphone-symbolic",
-    );
-    applications.add(&tonex_row);
+    let product_manager_row = build_product_manager_row(Arc::clone(&library), &toast_overlay);
+    product_manager_group.add(&product_manager_row);
+    content.append(&product_manager_group);
 
-    let amplitube_row = build_app_row(
-        &window,
-        Arc::clone(&library),
-        &toast_overlay,
-        WireApp::Amplitube5,
-        "audio-speakers-symbolic",
-    );
-    applications.add(&amplitube_row);
+    // ---------------------------------------------------------
+    // Applications - install through Product Manager above, then
+    // launch from here once WireBox detects them.
+    // ---------------------------------------------------------
+
+    let applications = PreferencesGroup::builder()
+        .title("Applications")
+        .description("Installed and launched from the same shared Wine environment")
+        .build();
+
+    let tonex_row = build_launch_row(&library, &toast_overlay, WireApp::Tonex, "audio-input-microphone-symbolic");
+    applications.add(&tonex_row.row);
+
+    let amplitube_row = build_launch_row(&library, &toast_overlay, WireApp::Amplitube5, "audio-speakers-symbolic");
+    applications.add(&amplitube_row.row);
 
     content.append(&applications);
     content.append(&Separator::new(Orientation::Horizontal));
+
+    // A single periodic check keeps both Launch rows in sync with
+    // whatever the user does inside Product Manager's own window,
+    // without needing bespoke polling wired to any one click.
+    start_periodic_refresh(Arc::clone(&library), vec![tonex_row, amplitube_row]);
+
+    // ---------------------------------------------------------
+    // Runtime
+    // ---------------------------------------------------------
 
     let runtime = PreferencesGroup::builder()
         .title("Runtime")
@@ -117,6 +133,9 @@ pub fn build_window(app: &Application) {
         "Not detected — WineASIO audio setup will likely fail"
     });
     runtime.add(&pipewire_row);
+
+    let audio_setup_row = build_audio_setup_row(Arc::clone(&library), &toast_overlay);
+    runtime.add(&audio_setup_row);
 
     let library_row = ActionRow::builder().title("Library Location").build();
     library_row.add_prefix(&Image::from_icon_name("folder-symbolic"));
@@ -164,7 +183,7 @@ fn show_about(window: &ApplicationWindow) {
         .application_icon("audio-x-generic")
         .version("0.1.0")
         .developer_name("KaelixDevs")
-        .comments("Run IK Multimedia TONEX and AmpliTube 5 natively on Linux, via an isolated Wine environment per application.")
+        .comments("Run IK Multimedia TONEX and AmpliTube 5 natively on Linux, through one shared Wine environment.")
         .website(REPO_URL)
         .issue_url(&format!("{REPO_URL}/issues"))
         .build();
@@ -172,15 +191,13 @@ fn show_about(window: &ApplicationWindow) {
     about.present(Some(window));
 }
 
-fn build_app_row(
-    window: &ApplicationWindow,
-    library: Arc<Library>,
-    toast_overlay: &ToastOverlay,
-    application: WireApp,
-    icon_name: &str,
-) -> ActionRow {
-    let row = ActionRow::builder().title(application.name()).build();
-    row.add_prefix(&Image::from_icon_name(icon_name));
+// ===========================================================
+// IK Product Manager
+// ===========================================================
+
+fn build_product_manager_row(library: Arc<Library>, toast_overlay: &ToastOverlay) -> ActionRow {
+    let row = ActionRow::builder().title("IK Product Manager").build();
+    row.add_prefix(&Image::from_icon_name("system-software-install-symbolic"));
 
     let spinner = Spinner::new();
     spinner.set_visible(false);
@@ -190,80 +207,45 @@ fn build_app_row(
     button.set_valign(Align::Center);
     row.add_suffix(&button);
 
-    let audio_button = Button::from_icon_name("audio-volume-high-symbolic");
-    audio_button.set_valign(Align::Center);
-    audio_button.set_tooltip_text(Some("Set up low-latency audio (WineASIO)"));
-    audio_button.set_visible(false);
-    row.add_suffix(&audio_button);
+    refresh_product_manager_row(&library, &row, &button);
 
-    refresh_row(&library, application, &row, &button, &audio_button);
-
-    let window = window.clone();
     let toast_overlay = toast_overlay.clone();
-
     let row_for_click = row.clone();
-    let button_for_click = button.clone();
-    let spinner_for_click = spinner.clone();
-    let audio_button_for_install = audio_button.clone();
 
-    let audio_library = Arc::clone(&library);
-    let audio_toast_overlay = toast_overlay.clone();
-    let audio_row = row.clone();
-
-    audio_button.connect_clicked(move |button| {
-        start_audio_setup(
-            Arc::clone(&audio_library),
-            &audio_toast_overlay,
-            application,
-            audio_row.clone(),
-            button.clone(),
-        );
-    });
-
-    button.connect_clicked(move |_| {
-        let state = library.state(application);
-
-        if state.is_installed() {
-            match library.launch(application) {
-                Ok(()) => {
-                    show_toast(&toast_overlay, &format!("{} launched", application.name()));
-                }
-                Err(error) => {
-                    row_for_click.set_subtitle(&format!("Launch failed — {error}"));
-                    show_toast(&toast_overlay, &format!("Couldn't launch {}: {error}", application.name()));
-                }
-            }
-
-            return;
-        }
-
-        start_setup(
-            &window,
+    button.connect_clicked(move |button| {
+        start_product_manager_setup(
             Arc::clone(&library),
             &toast_overlay,
-            application,
             row_for_click.clone(),
-            button_for_click.clone(),
-            spinner_for_click.clone(),
-            audio_button_for_install.clone(),
+            button.clone(),
+            spinner.clone(),
         );
     });
 
     row
 }
 
-/// Kicks off the Product Manager bootstrap on a background thread (it
-/// blocks the first time, while PM's own setup wizard runs), then hands
-/// off to `poll_for_completion` once Product Manager's window is open.
-fn start_setup(
-    _window: &ApplicationWindow,
+fn refresh_product_manager_row(library: &Library, row: &ActionRow, button: &Button) {
+    if library.product_manager_installed() {
+        button.set_label("Open IK Product Manager");
+        row.set_subtitle("Installed — log in there to install TONEX or AmpliTube 5");
+    } else {
+        button.set_label("Install IK Product Manager");
+        row.set_subtitle("Not installed — WireBox downloads this automatically, no file needed");
+    }
+}
+
+/// Downloads (first time only) and opens IK Product Manager, on a
+/// background thread since the download/first-run setup blocks. Once
+/// this returns successfully, Product Manager's own window is open and
+/// ready for the user to log in - installing TONEX/AmpliTube 5 from
+/// there is picked up by `start_periodic_refresh`, not by this function.
+fn start_product_manager_setup(
     library: Arc<Library>,
     toast_overlay: &ToastOverlay,
-    application: WireApp,
     row: ActionRow,
     button: Button,
     spinner: Spinner,
-    audio_button: Button,
 ) {
     button.set_sensitive(false);
     button.set_label("Setting up…");
@@ -276,7 +258,7 @@ fn start_setup(
     let install_library = Arc::clone(&library);
 
     std::thread::spawn(move || {
-        let result = install_library.install(application);
+        let result = install_library.install_product_manager();
         let _ = sender.send(result);
     });
 
@@ -285,21 +267,11 @@ fn start_setup(
     glib::timeout_add_local(Duration::from_millis(150), move || {
         match receiver.try_recv() {
             Ok(Ok(())) => {
-                row.set_subtitle(&format!(
-                    "IK Product Manager is open — log in and install {} from there.",
-                    application.name()
-                ));
-                button.set_label("Waiting for install…");
-
-                poll_for_completion(
-                    Arc::clone(&library),
-                    toast_overlay.clone(),
-                    application,
-                    row.clone(),
-                    button.clone(),
-                    spinner.clone(),
-                    audio_button.clone(),
-                );
+                spinner.stop();
+                spinner.set_visible(false);
+                button.set_sensitive(true);
+                refresh_product_manager_row(&library, &row, &button);
+                show_toast(&toast_overlay, "IK Product Manager is open");
 
                 glib::ControlFlow::Break
             }
@@ -308,9 +280,9 @@ fn start_setup(
                 spinner.stop();
                 spinner.set_visible(false);
                 button.set_sensitive(true);
-                button.set_label(&format!("Install {}", application.name()));
+                refresh_product_manager_row(&library, &row, &button);
                 row.set_subtitle(&format!("Setup failed — {error}"));
-                show_toast(&toast_overlay, &format!("Couldn't set up {}: {error}", application.name()));
+                show_toast(&toast_overlay, &format!("Couldn't set up Product Manager: {error}"));
 
                 glib::ControlFlow::Break
             }
@@ -321,7 +293,6 @@ fn start_setup(
                 spinner.stop();
                 spinner.set_visible(false);
                 button.set_sensitive(true);
-                button.set_label(&format!("Install {}", application.name()));
                 row.set_subtitle("Setup thread ended unexpectedly.");
 
                 glib::ControlFlow::Break
@@ -330,64 +301,176 @@ fn start_setup(
     });
 }
 
-/// After Product Manager is open, WireBox has no way to know when the
-/// user finishes logging in and clicking install inside it - so it just
-/// checks disk periodically until the application's executable shows up.
-fn poll_for_completion(
-    library: Arc<Library>,
-    toast_overlay: ToastOverlay,
+// ===========================================================
+// Per-application Launch rows
+// ===========================================================
+
+struct LaunchRow {
     application: WireApp,
     row: ActionRow,
     button: Button,
-    spinner: Spinner,
-    audio_button: Button,
-) {
-    glib::timeout_add_local(Duration::from_secs(2), move || {
-        let state = library.state(application);
-
-        if let Some(executable) = state.executable {
-            spinner.stop();
-            spinner.set_visible(false);
-            button.set_sensitive(true);
-            button.set_label(&format!("Launch {}", application.name()));
-            row.set_subtitle(&format!("Installed — {}", executable.display()));
-            audio_button.set_visible(true);
-            show_toast(&toast_overlay, &format!("{} is ready", application.name()));
-
-            glib::ControlFlow::Break
-        } else {
-            glib::ControlFlow::Continue
-        }
-    });
 }
 
-fn refresh_row(
-    library: &Library,
+fn build_launch_row(
+    library: &Arc<Library>,
+    toast_overlay: &ToastOverlay,
     application: WireApp,
-    row: &ActionRow,
-    button: &Button,
-    audio_button: &Button,
-) {
+    icon_name: &str,
+) -> LaunchRow {
+    let row = ActionRow::builder().title(application.name()).build();
+    row.add_prefix(&Image::from_icon_name(icon_name));
+
+    let button = Button::with_label("Launch");
+    button.set_valign(Align::Center);
+    row.add_suffix(&button);
+
+    refresh_launch_row(library, application, &row, &button);
+
+    let library = Arc::clone(library);
+    let toast_overlay = toast_overlay.clone();
+    let row_for_click = row.clone();
+
+    button.connect_clicked(move |_| {
+        match library.launch(application) {
+            Ok(()) => show_toast(&toast_overlay, &format!("{} launched", application.name())),
+            Err(error) => {
+                row_for_click.set_subtitle(&format!("Launch failed — {error}"));
+                show_toast(&toast_overlay, &format!("Couldn't launch {}: {error}", application.name()));
+            }
+        }
+    });
+
+    LaunchRow { application, row, button }
+}
+
+fn refresh_launch_row(library: &Library, application: WireApp, row: &ActionRow, button: &Button) {
     let state = library.state(application);
 
     match state.executable {
         Some(executable) => {
-            button.set_label(&format!("Launch {}", application.name()));
             row.set_subtitle(&format!("Installed — {}", executable.display()));
-            audio_button.set_visible(true);
+            button.set_sensitive(true);
         }
         None => {
-            button.set_label(&format!("Install {}", application.name()));
-            row.set_subtitle("Not installed");
-            audio_button.set_visible(false);
+            row.set_subtitle("Not installed yet — install it from IK Product Manager above");
+            button.set_sensitive(false);
         }
     }
+}
+
+/// Keeps every Launch row's enabled state and subtitle in sync with
+/// whatever the user does inside Product Manager's own window. WireBox
+/// has no event to hook for "an install finished in some other app's
+/// UI," so this just checks disk every couple of seconds for as long as
+/// the window is open - cheap enough that a fixed poll is simpler and
+/// more robust than trying to wire this to any specific button click.
+fn start_periodic_refresh(library: Arc<Library>, rows: Vec<LaunchRow>) {
+    glib::timeout_add_local(Duration::from_secs(2), move || {
+        for row in &rows {
+            refresh_launch_row(&library, row.application, &row.row, &row.button);
+        }
+
+        glib::ControlFlow::Continue
+    });
+}
+
+// ===========================================================
+// Audio setup (hub-wide, not per-application)
+// ===========================================================
+
+fn build_audio_setup_row(library: Arc<Library>, toast_overlay: &ToastOverlay) -> ActionRow {
+    let row = ActionRow::builder().title("Low-Latency Audio").build();
+    row.add_prefix(&Image::from_icon_name("audio-card-symbolic"));
+    row.set_subtitle("Registers WineASIO via winetricks, for use once an app is installed");
+
+    let spinner = Spinner::new();
+    spinner.set_visible(false);
+    row.add_suffix(&spinner);
+
+    let button = Button::with_label("Set Up Audio");
+    button.set_valign(Align::Center);
+    row.add_suffix(&button);
+
+    let toast_overlay = toast_overlay.clone();
+    let row_for_click = row.clone();
+
+    button.connect_clicked(move |button| {
+        start_audio_setup(
+            Arc::clone(&library),
+            &toast_overlay,
+            row_for_click.clone(),
+            button.clone(),
+            spinner.clone(),
+        );
+    });
+
+    row
+}
+
+/// Registers WineASIO in the shared hub prefix via `winetricks`, on a
+/// background thread so the UI stays responsive while it downloads and
+/// builds the driver (can take a while the first time).
+fn start_audio_setup(library: Arc<Library>, toast_overlay: &ToastOverlay, row: ActionRow, button: Button, spinner: Spinner) {
+    button.set_sensitive(false);
+    spinner.set_visible(true);
+    spinner.start();
+    row.set_subtitle("Setting up low-latency audio (WineASIO via winetricks)…");
+
+    let (sender, receiver) = mpsc::channel::<wirebox::Result<()>>();
+
+    let audio_library = Arc::clone(&library);
+
+    std::thread::spawn(move || {
+        let result = audio_library.set_up_audio();
+        let _ = sender.send(result);
+    });
+
+    let toast_overlay = toast_overlay.clone();
+
+    glib::timeout_add_local(Duration::from_millis(150), move || {
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                spinner.stop();
+                spinner.set_visible(false);
+                button.set_sensitive(true);
+                row.set_subtitle("WineASIO is registered");
+                show_toast(&toast_overlay, "Audio set up");
+
+                glib::ControlFlow::Break
+            }
+
+            Ok(Err(error)) => {
+                spinner.stop();
+                spinner.set_visible(false);
+                button.set_sensitive(true);
+                row.set_subtitle("Registers WineASIO via winetricks, for use once an app is installed");
+                show_toast(&toast_overlay, &format!("Audio setup failed: {error}"));
+
+                glib::ControlFlow::Break
+            }
+
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+
+            Err(mpsc::TryRecvError::Disconnected) => {
+                spinner.stop();
+                spinner.set_visible(false);
+                button.set_sensitive(true);
+                show_toast(&toast_overlay, "Audio setup thread ended unexpectedly.");
+
+                glib::ControlFlow::Break
+            }
+        }
+    });
 }
 
 fn show_toast(overlay: &ToastOverlay, message: &str) {
     let toast = adw::Toast::builder().title(message).timeout(4).build();
     overlay.add_toast(toast);
 }
+
+// ===========================================================
+// Audio device list
+// ===========================================================
 
 /// Scans for PipeWire audio devices on a background thread and replaces
 /// `placeholder` with one row per device once done. Each row lets the
@@ -494,70 +577,3 @@ fn add_device_row(group: &PreferencesGroup, device: wirebox::audio::AudioDevice,
 
     group.add(&row);
 }
-
-/// Registers WineASIO inside `application`'s prefix via `winetricks`, on
-/// a background thread so the UI stays responsive while it downloads and
-/// builds the driver (can take a while the first time).
-fn start_audio_setup(
-    library: Arc<Library>,
-    toast_overlay: &ToastOverlay,
-    application: WireApp,
-    row: ActionRow,
-    audio_button: Button,
-) {
-    audio_button.set_sensitive(false);
-
-    // Rebuild the "installed" subtitle ourselves rather than reading it
-    // back off the widget - GTK's string-property getters vary between
-    // returning `GString` and `Option<GString>` across binding versions,
-    // and we already know the state that produced it (this button is
-    // only visible once `state.executable` is `Some`).
-    let installed_subtitle = library
-        .state(application)
-        .executable
-        .map(|executable| format!("Installed — {}", executable.display()))
-        .unwrap_or_else(|| "Installed".to_string());
-
-    row.set_subtitle("Setting up low-latency audio (WineASIO via winetricks)…");
-
-    let (sender, receiver) = mpsc::channel::<wirebox::Result<()>>();
-
-    let audio_library = Arc::clone(&library);
-
-    std::thread::spawn(move || {
-        let result = audio_library.set_up_audio(application);
-        let _ = sender.send(result);
-    });
-
-    let toast_overlay = toast_overlay.clone();
-
-    glib::timeout_add_local(Duration::from_millis(150), move || {
-        match receiver.try_recv() {
-            Ok(Ok(())) => {
-                audio_button.set_sensitive(true);
-                row.set_subtitle(&format!("{installed_subtitle} — WineASIO is registered"));
-                show_toast(&toast_overlay, &format!("Audio set up for {}", application.name()));
-
-                glib::ControlFlow::Break
-            }
-
-            Ok(Err(error)) => {
-                audio_button.set_sensitive(true);
-                row.set_subtitle(&installed_subtitle);
-                show_toast(&toast_overlay, &format!("Audio setup failed: {error}"));
-
-                glib::ControlFlow::Break
-            }
-
-            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-
-            Err(mpsc::TryRecvError::Disconnected) => {
-                audio_button.set_sensitive(true);
-                show_toast(&toast_overlay, "Audio setup thread ended unexpectedly.");
-
-                glib::ControlFlow::Break
-            }
-        }
-    });
-}
-

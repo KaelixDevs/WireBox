@@ -94,7 +94,21 @@ impl WinePrefix {
                 source,
             })?;
 
-        check_status("wineboot", status)
+        check_status("wineboot", status)?;
+
+        // Best-effort cosmetic tweak, not load-bearing: blanks the fake
+        // desktop's wallpaper so the brief moment between opening the
+        // virtual desktop and an app's own window/splash taking it over
+        // is a plain gray screen instead of a bright blue one with
+        // whatever shortcut icons happen to be sitting on it. If this
+        // fails for some reason, it's not worth failing the whole prefix
+        // init over.
+        let _ = self
+            .command()
+            .args(["reg", "add", r"HKCU\Control Panel\Desktop", "/v", "Wallpaper", "/d", "", "/f"])
+            .status();
+
+        Ok(())
     }
 
     /// Opens Wine's configuration UI for this prefix (audio/graphics/etc).

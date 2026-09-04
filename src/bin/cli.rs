@@ -10,10 +10,10 @@ fn main() {
 
     match args.get(1).map(String::as_str) {
         Some("status") => status(),
-        Some("install") => install(args.get(2)),
+        Some("install") => install(),
         Some("launch") => launch(args.get(2)),
-        Some("audio") => audio(args.get(2)),
-        Some("reset") => reset(args.get(2)),
+        Some("audio") => audio(),
+        Some("reset") => reset(),
         _ => print_usage(),
     }
 }
@@ -22,11 +22,11 @@ fn print_usage() {
     println!("WireBox — engine preview (no GUI yet)");
     println!();
     println!("USAGE:");
-    println!("    wirebox status");
-    println!("    wirebox install <tonex|amplitube5>");
-    println!("    wirebox launch  <tonex|amplitube5>");
-    println!("    wirebox audio   <tonex|amplitube5>   (registers WineASIO for low-latency audio)");
-    println!("    wirebox reset   <tonex|amplitube5>   (wipes and recreates the prefix)");
+    println!("    wirebox-cli status");
+    println!("    wirebox-cli install                    (downloads/opens IK Product Manager)");
+    println!("    wirebox-cli launch <tonex|amplitube5>");
+    println!("    wirebox-cli audio                       (registers WineASIO for low-latency audio)");
+    println!("    wirebox-cli reset                       (wipes and recreates the shared prefix)");
 }
 
 fn parse_application(arg: Option<&String>) -> Option<Application> {
@@ -41,35 +41,27 @@ fn status() {
         return;
     }
 
-    println!("Library root: {}", library.root().display());
+    println!("Library root:    {}", library.root().display());
+    println!("Shared prefix:   {}", library.prefix_path().display());
     println!(
-        "PipeWire:     {}",
+        "Product Manager: {}",
+        if library.product_manager_installed() { "installed" } else { "not installed" }
+    );
+    println!(
+        "PipeWire:        {}",
         if wirebox::audio::is_pipewire_active() { "active" } else { "not detected" }
     );
     println!();
 
     for state in library.all_states() {
         match state.executable {
-            Some(executable) => {
-                println!("{:<12} installed — {}", state.application.name(), executable.display());
-            }
-            None => {
-                println!(
-                    "{:<12} not installed (prefix: {})",
-                    state.application.name(),
-                    state.prefix.display()
-                );
-            }
+            Some(executable) => println!("{:<12} installed — {}", state.application.name(), executable.display()),
+            None => println!("{:<12} not installed", state.application.name()),
         }
     }
 }
 
-fn install(app: Option<&String>) {
-    let Some(application) = parse_application(app) else {
-        eprintln!("Usage: wirebox install <tonex|amplitube5>");
-        return;
-    };
-
+fn install() {
     let library = Library::new();
 
     if let Err(error) = library.ensure_ready() {
@@ -77,18 +69,12 @@ fn install(app: Option<&String>) {
         return;
     }
 
-    println!(
-        "Setting up {} — downloading IK Product Manager if needed, this can take a moment...",
-        application.name()
-    );
+    println!("Setting up IK Product Manager — downloading it if needed, this can take a moment...");
 
-    match library.install(application) {
+    match library.install_product_manager() {
         Ok(()) => {
-            println!(
-                "IK Product Manager is open. Log in, then install {} from there.",
-                application.name()
-            );
-            println!("Run `wirebox status` afterward to check whether WireBox found it.");
+            println!("IK Product Manager is open. Log in, then install TONEX and/or AmpliTube 5 from there.");
+            println!("Run `wirebox-cli status` afterward to check whether WireBox found them.");
         }
         Err(error) => eprintln!("Setup failed: {error}"),
     }
@@ -96,7 +82,7 @@ fn install(app: Option<&String>) {
 
 fn launch(app: Option<&String>) {
     let Some(application) = parse_application(app) else {
-        eprintln!("Usage: wirebox launch <tonex|amplitube5>");
+        eprintln!("Usage: wirebox-cli launch <tonex|amplitube5>");
         return;
     };
 
@@ -108,38 +94,22 @@ fn launch(app: Option<&String>) {
     }
 }
 
-fn audio(app: Option<&String>) {
-    let Some(application) = parse_application(app) else {
-        eprintln!("Usage: wirebox audio <tonex|amplitube5>");
-        return;
-    };
-
+fn audio() {
     let library = Library::new();
 
-    println!(
-        "Registering WineASIO for {} - this needs winetricks installed and can take a moment...",
-        application.name()
-    );
+    println!("Registering WineASIO — this needs winetricks installed and can take a moment...");
 
-    match library.set_up_audio(application) {
-        Ok(()) => println!("Done. {} should now see a low-latency ASIO audio device.", application.name()),
+    match library.set_up_audio() {
+        Ok(()) => println!("Done. Apps in the shared prefix should now see a low-latency ASIO audio device."),
         Err(error) => eprintln!("Audio setup failed: {error}"),
     }
 }
 
-fn reset(app: Option<&String>) {
-    let Some(application) = parse_application(app) else {
-        eprintln!("Usage: wirebox reset <tonex|amplitube5>");
-        return;
-    };
-
+fn reset() {
     let library = Library::new();
 
-    match library.reset(application) {
-        Ok(()) => println!(
-            "{}'s prefix has been wiped and recreated. You'll need to reinstall it.",
-            application.name()
-        ),
+    match library.reset() {
+        Ok(()) => println!("The shared prefix has been wiped and recreated. Everything will need reinstalling."),
         Err(error) => eprintln!("Reset failed: {error}"),
     }
 }
